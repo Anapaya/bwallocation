@@ -1,0 +1,34 @@
+before:
+  hooks:
+    - go mod download
+builds:
+  - main: ./cmd/bwreserver/main.go
+    binary: bwreserver
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+archives:
+  - replacements:
+      linux: linux
+      amd64: 64-bit
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+release:
+  github:
+    owner: anapaya
+    name: bwallocation
+  draft: true
