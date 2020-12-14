@@ -1,0 +1,59 @@
+// Copyright 2020 Anapaya Systems
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
+syntax = "proto3";
+
+option go_package = "github.com/anapaya/bwallocation/proto/bw_allocation";
+
+package anapaya.proto.bw_allocation.v1;
+
+service BandwithAllocationService {
+    //  Reserve returns a bandwidth reservation for the given request.
+    rpc Reserve(ReserveRequest) returns (ReserveResponse) {}
+}
+
+message ReserveRequest {
+    // The destination ISD-AS.
+    uint64 dst_isd_as = 1;
+    // The source host of the requested bandwidth reservation.
+    bytes src_host = 2;
+    // The destination host of the requested bandwidth reservation.
+    bytes dst_host = 3;
+    // The reservation ID of the requested bandwidth reservation.
+    uint32 id = 4;
+    // The expiration time of the reservation. The timestamp is encoded as
+    // number of seconds elapsed since January 1, 1970 UTC.
+    int64 expiration_time = 5;
+    // The bandwidth of the reservation in bps.
+    uint64 bandwidth = 6;
+    // The raw SCION path that is used with the bandwidth reservation.
+    bytes path = 7;
+}
+
+message ReserveResponse {
+    // The message authentication code that authenticates the reservation.
+    bytes mac = 3;
+}
+
+message BandwidthHint {
+    // The maxium bandwidth that the services is able to allocate at this point
+    // in time.
+    uint64 max_bandwidth = 1;
+}
+
+message ExpirationHint {
+    // The maxmimum acceptable expiration time.
+    int64 max_expiration_time = 1;
+}
