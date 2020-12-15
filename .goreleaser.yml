@@ -14,9 +14,6 @@ archives:
   - replacements:
       linux: linux
       amd64: 64-bit
-source:
-  enabled: true
-  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
 checksum:
   name_template: 'checksums.txt'
 snapshot:
