@@ -34,6 +34,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	pb "github.com/anapaya/bwallocation/proto/bwreserver/v1"
+	"github.com/anapaya/bwallocation/reservation"
 	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/fatal"
 	"github.com/scionproto/scion/go/lib/infra/infraenv"
@@ -538,6 +539,7 @@ func headerLen(sender *snet.UDPAddr, localAddrLen int) int {
 		2*addr.IABytes +
 		senderAddrLen +
 		localAddrLen +
+		reservation.MetaLen + // Meta header is stripped in reversal.
 		len(sender.Path.Raw) +
 		8 // UDP/SCION header
 }

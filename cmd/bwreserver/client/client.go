@@ -57,9 +57,10 @@ const (
 
 func Cmd(pather command.Pather) *cobra.Command {
 	var flags struct {
-		bandwidth   string
-		bestEffort  bool
+		reservation string
+		rate        string
 		quic        bool
+		pldSize     int
 		local       net.IP
 		sciond      string
 		duration    int
@@ -72,8 +73,8 @@ func Cmd(pather command.Pather) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "client <server-addr>",
 		Short: "Bandwidth Reservation Demo Client",
-		Example: fmt.Sprintf(`  %[1]s client 1-ff00:0:112,127.0.0.1:9000 -b 5mbps -d 10
-  %[1]s client 1-ff00:0:112,127.0.0.1:9000 --quic
+		Example: fmt.Sprintf(`  %[1]s client 1-ff00:0:112,127.0.0.1:9000 -s 5mbps -d 10
+  %[1]s client 1-ff00:0:112,127.0.0.1:9000 -s 10mbps -r 5mbps
   %[1]s client 1-ff00:0:112,127.0.0.1:9000 --text
 `, pather.CommandPath()),
 		Args: cobra.ExactArgs(1),
@@ -89,9 +90,20 @@ is used. QUIC/SCION can be enabled with the appropriate flag.
 				return serrors.WrapStr("parsing remote", err)
 			}
 
-			var bw bwallocation.Bandwidth
-			if err := bw.UnmarshalText([]byte(flags.bandwidth)); err != nil {
-				return serrors.WrapStr("parsing bandwidth", err)
+			var rate bwallocation.Bandwidth
+			if err := rate.UnmarshalText([]byte(flags.rate)); err != nil {
+				return serrors.WrapStr("parsing sending-rate", err)
+			}
+
+			var reservation bwallocation.Bandwidth
+			switch flags.reservation {
+			case "none":
+			case "sending-rate":
+				reservation = rate
+			default:
+				if err := reservation.UnmarshalText([]byte(flags.reservation)); err != nil {
+					return serrors.WrapStr("parsing reservation", err)
+				}
 			}
 
 			if err := app.SetupLog(flags.logLevel); err != nil {
@@ -112,10 +124,11 @@ is used. QUIC/SCION can be enabled with the appropriate flag.
 			client := &client{
 				remote:      remote,
 				view:        v,
-				bw:          bw,
+				rate:        rate,
+				reservation: reservation,
+				payloadSize: flags.pldSize,
 				duration:    time.Duration(flags.duration) * time.Second,
 				quic:        flags.quic,
-				bestEffort:  flags.bestEffort,
 				interactive: flags.interactive,
 				sequence:    flags.sequence,
 				text:        flags.text,
@@ -163,24 +176,30 @@ is used. QUIC/SCION can be enabled with the appropriate flag.
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&flags.bandwidth, "bandwidth", "b", "1mbps",
-		"bandwidth to reserve. If --best-effort is provided, the client will attempt to send at "+
-			"the specified rate.")
-	cmd.Flags().BoolVar(&flags.bestEffort, "best-effort", false,
-		"send best effort traffic without any reservation")
+	cmd.Flags().StringVarP(&flags.rate, "sending-rate", "s", "1mbps",
+		"rate the client attempts to send at")
+	cmd.Flags().StringVarP(&flags.reservation, "reservation", "r", "sending-rate", ""+
+		"bandwidth to reserve. Setting this lower than sending rate simulates malicious behavior."+
+		"\nsupported values:\n"+
+		"  <bandwidth>:  Reserve the specified bandwidth\n"+
+		"  sending-rate: Use same value as sending-rate\n"+
+		"  none:         Do not reserve any bandwidth\n",
+	)
 	cmd.Flags().BoolVar(&flags.quic, "quic", false,
 		"use QUIC when sending data. If not specified, UDP is used.")
 	cmd.Flags().IPVar(&flags.local, "local", nil, "IP address to listen on")
 	cmd.Flags().StringVar(&flags.sciond, "sciond", sciond.DefaultAPIAddress, "SCION Daemon address")
-	cmd.Flags().IntVarP(&flags.duration, "duration", "d", 0,
-		"duration of the data transmission in seconds. 0 or negative values will keep the "+
-			"data transmission going indefinitely.")
+	cmd.Flags().IntVarP(&flags.duration, "duration", "d", 0, ""+
+		"duration of the data transmission in seconds.\n"+
+		"0 or negative values will keep the data transmission going indefinitely.",
+	)
 	cmd.Flags().BoolVarP(&flags.interactive, "interactive", "i", false, "interactive mode")
 	cmd.Flags().StringVar(&flags.sequence, "sequence", "", app.SequenceUsage)
 	cmd.Flags().Var(&flags.pprof, "pprof", "Address to serve pprof")
 	cmd.Flags().StringVar(&flags.logLevel, "log.level", "", app.LogLevelUsage)
 	cmd.Flags().BoolVar(&flags.text, "text", false,
 		"use simple text mode. If not specified, the CLI widgets output is used.")
+	cmd.Flags().IntVar(&flags.pldSize, "payload", 1280, "payload size in bytes")
 
 	return cmd
 }
@@ -194,10 +213,11 @@ type client struct {
 	grpcClientConn *grpc.ClientConn
 	daemon         net.Addr
 
-	bw          bwallocation.Bandwidth
+	rate        bwallocation.Bandwidth
+	reservation bwallocation.Bandwidth
+	payloadSize int
 	duration    time.Duration
 	quic        bool
-	bestEffort  bool
 	interactive bool
 	sequence    string
 
@@ -322,15 +342,16 @@ func (c *client) run(ctx context.Context) error {
 	c.println("remote data endpoint:   ", conn.RemoteAddr())
 
 	sender := &sender{
-		dataConn:   conn,
-		remote:     c.remote,
-		bw:         c.bw,
-		duration:   c.duration,
-		ratelimit:  !c.quic,
-		text:       c.text,
-		view:       c.view,
-		bestEffort: c.bestEffort,
-		tsClient:   c.tsClient,
+		dataConn:    conn,
+		remote:      c.remote,
+		rate:        c.rate,
+		reservation: c.reservation,
+		payloadSize: c.payloadSize,
+		duration:    c.duration,
+		ratelimit:   !c.quic,
+		text:        c.text,
+		view:        c.view,
+		tsClient:    c.tsClient,
 	}
 
 	fetchCtx, cancelFetching := context.WithCancel(ctx)
@@ -449,7 +470,7 @@ func (c *client) setupDataSession(ctx context.Context) (net.Conn, func(), error)
 	}
 	conn := net.Conn(udpConn)
 	closeF := func() {}
-	if !c.bestEffort {
+	if !c.bestEffort() {
 		if conn, closeF, err = c.withReservation(ctx, udpConn); err != nil {
 			udpConn.Close()
 			return nil, nil, serrors.WrapStr("establishing reservation", err)
@@ -486,7 +507,7 @@ func (c *client) withReservation(ctx context.Context, conn *snet.Conn) (net.Conn
 		expiration = time.Now().Add(c.duration + 2*time.Second)
 	}
 	sub, err := manager.Subscribe(ctx, bwallocation.SubscriptionInfo{
-		Bandwidth:   c.bw,
+		Bandwidth:   c.reservation,
 		Destination: c.remote,
 		Source:      c.local,
 		Expiration:  expiration,
@@ -528,15 +549,20 @@ func (c *client) reportStats() {
 	}
 }
 
+func (c *client) bestEffort() bool {
+	return c.reservation == 0
+}
+
 type sender struct {
-	dataConn   net.Conn
-	remote     *snet.UDPAddr
-	bw         bwallocation.Bandwidth
-	duration   time.Duration
-	ratelimit  bool
-	bestEffort bool
-	text       bool
-	view       *view.View
+	dataConn    net.Conn
+	remote      *snet.UDPAddr
+	rate        bwallocation.Bandwidth
+	reservation bwallocation.Bandwidth
+	payloadSize int
+	duration    time.Duration
+	ratelimit   bool
+	text        bool
+	view        *view.View
 
 	tsClient *telemetry.TimeSeries
 }
@@ -547,14 +573,12 @@ func (s *sender) send(ctx context.Context) error {
 	}
 	defer s.dataConn.Close()
 
-	// TODO(shitz): make this a flag.
-	pldLen := 1280
 	// TODO(shitz): this doesn't take into account the QUIC header.
-	pktLen := calcPktLen(pldLen, s.dataConn.LocalAddr(), s.remote)
-	pps := int(s.bw) / (pktLen * 8)
+	pktLen := calcPktLen(s.payloadSize, s.dataConn.LocalAddr(), s.remote)
+	pps := int(s.rate) / (pktLen * 8)
 	limiter := ratelimit.New(int(pps))
 
-	pld := make([]byte, pldLen)
+	pld := make([]byte, s.payloadSize)
 	rand.Read(pld)
 
 	bytesSent := 0
@@ -562,12 +586,14 @@ func (s *sender) send(ctx context.Context) error {
 	end := start.Add(s.duration)
 	infinite := !end.After(start)
 
-	if s.bestEffort {
-		s.println("desired bandwidth:       best effort")
+	if s.reservation != 0 {
+		s.printf("reserved bandwidth:      %s\n", s.reservation)
 	} else {
-		s.printf("desired bandwidth:       %s pps: %d (at %dB + %dB = %dB packets)\n",
-			s.bw, pps, pldLen, pktLen-pldLen, pktLen)
+		s.println("reserved bandwidth:      none")
 	}
+	s.printf("desired sending rate:    %s pps: %d (at %dB + %dB = %dB packets)\n",
+		s.rate, pps, s.payloadSize, pktLen-s.payloadSize, pktLen)
+
 	for {
 		select {
 		case <-ctx.Done():

@@ -5,7 +5,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/anapaya/bwallocation/help%20wanted.svg?label=help%20wanted&color=purple)](https://github.com/anapaya/bwallocation/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22)
 [![GitHub issues](https://img.shields.io/github/issues/anapaya/bwallocation/good%20first%20issue.svg?label=good%20first%20issue&color=purple)](https://github.com/anapaya/bwallocation/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
 [![Release](https://img.shields.io/github/release-pre/anapaya/bwallocation.svg)](https://github.com/anapaya/bwallocation/releases)
-[![License](https://img.shields.io/github/license/anapaya/bwallocation.svg?maxAge=2592000)](https://github.com/anapaya/bwallocation/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/Anapaya/bwallocation.svg?maxAge=2592000)](https://github.com/Anapaya/bwallocation/blob/main/LICENSE)
 
 `bwallocation` is a go library for establishing bandwidth reservations in the
 bandwidth allocation system.
@@ -93,24 +93,31 @@ Usage:
   bwreserver client <server-addr> [flags]
 
 Examples:
-  bwreserver client 1-ff00:0:112,127.0.0.1:9000 -b 5mbps -d 10
-  bwreserver client 1-ff00:0:112,127.0.0.1:9000 --quic
+  bwreserver client 1-ff00:0:112,127.0.0.1:9000 -s 5mbps -d 10
+  bwreserver client 1-ff00:0:112,127.0.0.1:9000 -s 10mbps -r 5mbps
   bwreserver client 1-ff00:0:112,127.0.0.1:9000 --text
 
 
 Flags:
-  -b, --bandwidth string   bandwidth to reserve. If --best-effort is provided, the client will attempt to send at the specified rate. (default "1mbps")
-      --best-effort        send best effort traffic without any reservation
-  -d, --duration int       duration of the data transmission in seconds. 0 or negative values will keep the data transmission going indefinitely.
-  -h, --help               help for client
-  -i, --interactive        interactive mode
-      --local ip           IP address to listen on
-      --log.level string   Console logging level verbosity (debug|info|error)
-      --pprof tcp-addr     Address to serve pprof (default :0)
-      --quic               use QUIC when sending data. If not specified, UDP is used.
-      --sciond string      SCION Daemon address (default "127.0.0.1:30255")
-      --sequence string    Space separated list of hop predicates
-      --text               use simple text mode. If not specified, the CLI widgets output is used.
+  -d, --duration int          duration of the data transmission in seconds.
+                              0 or negative values will keep the data transmission going indefinitely.
+  -h, --help                  help for client
+  -i, --interactive           interactive mode
+      --local ip              IP address to listen on
+      --log.level string      Console logging level verbosity (debug|info|error)
+      --payload int           payload size in bytes (default 1280)
+      --pprof tcp-addr        Address to serve pprof (default :0)
+      --quic                  use QUIC when sending data. If not specified, UDP is used.
+  -r, --reservation string    bandwidth to reserve. Setting this lower than sending rate simulates malicious behavior.
+                              supported values:
+                                <bandwidth>:  Reserve the specified bandwidth
+                                sending-rate: Use same value as sending-rate
+                                none:         Do not reserve any bandwidth
+                               (default "sending-rate")
+      --sciond string         SCION Daemon address (default "127.0.0.1:30255")
+  -s, --sending-rate string   rate the client attempts to send at (default "1mbps")
+      --sequence string       Space separated list of hop predicates
+      --text                  use simple text mode. If not specified, the CLI widgets output is used.
 ```
 
 ## Screenshots
