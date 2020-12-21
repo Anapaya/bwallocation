@@ -304,13 +304,31 @@ func (c *client) init(ctx context.Context, sd string, localIP net.IP) error {
 		return serrors.WrapStr("creating client connection", err)
 	}
 
+	reservation := Reservation{
+		Conn:   clientConn,
+		Daemon: c.daemon,
+		SubscriptionInfo: bwallocation.SubscriptionInfo{
+			Bandwidth:   1e6,
+			Destination: c.remote,
+			Source:      c.local,
+			Expiration:  ComputeExpiration(c.duration),
+			Path:        &c.remote.Path,
+		},
+	}
+	// FIXME(scrye): Do not clean up reservation because this is a short-lived up.
+	reservedClientConn, _, err := Reserve(ctx, reservation)
+	if err != nil {
+		return serrors.WrapStr("reserving bandwidth", err)
+	}
+	c.printf("Local endpoint: %s\n", clientConn.LocalAddr())
+
 	// Setup QUIC stack and gRPC client conn
 	c.tlsConfig, err = infraenv.GenerateTLSConfig()
 	if err != nil {
 		return serrors.WrapStr("generating TLS config", err)
 	}
 	dialer := &squic.ConnDialer{
-		Conn:      clientConn,
+		Conn:      reservedClientConn.(net.PacketConn),
 		TLSConfig: c.tlsConfig,
 	}
 	dialF := func(context.Context, string) (net.Conn, error) {
@@ -471,7 +489,18 @@ func (c *client) setupDataSession(ctx context.Context) (net.Conn, func(), error)
 	conn := net.Conn(udpConn)
 	closeF := func() {}
 	if !c.bestEffort() {
-		if conn, closeF, err = c.withReservation(ctx, udpConn); err != nil {
+		reservation := Reservation{
+			Conn:   udpConn,
+			Daemon: c.daemon,
+			SubscriptionInfo: bwallocation.SubscriptionInfo{
+				Bandwidth:   c.reservation,
+				Destination: c.remote,
+				Source:      c.local,
+				Expiration:  ComputeExpiration(c.duration),
+				Path:        &c.remote.Path,
+			},
+		}
+		if conn, closeF, err = Reserve(ctx, reservation); err != nil {
 			udpConn.Close()
 			return nil, nil, serrors.WrapStr("establishing reservation", err)
 		}
@@ -496,28 +525,38 @@ func (c *client) setupDataSession(ctx context.Context) (net.Conn, func(), error)
 	}
 }
 
-func (c *client) withReservation(ctx context.Context, conn *snet.Conn) (net.Conn, func(), error) {
+// Reservation contains all the information for registering a reservation for
+// a connection.
+type Reservation struct {
+	// Conn is the connection on which the reservation will be applied.
+	Conn *snet.Conn
+	// Daemon is the SCION Daemon to which the reservation RPCs will be sent.
+	Daemon net.Addr
+	// SubscriptionInfo describes the reservation parameters.
+	SubscriptionInfo bwallocation.SubscriptionInfo
+}
+
+// ComputeExpiration computes the expiration time of the reservation.
+// If d is 0, then the reservation is renewed forever.
+func ComputeExpiration(d time.Duration) time.Time {
+	if d > 0 {
+		return time.Now().Add(d + 2*time.Second)
+	}
+	return time.Time{}
+}
+
+func Reserve(ctx context.Context, r Reservation) (net.Conn, func(), error) {
 	manager := bwallocation.Manager{
-		Service: c.daemon,
+		Service: r.Daemon,
 		Dialer:  libgrpc.SimpleDialer{},
 		Logger:  log.Root(),
 	}
-	var expiration time.Time
-	if c.duration > 0 {
-		expiration = time.Now().Add(c.duration + 2*time.Second)
-	}
-	sub, err := manager.Subscribe(ctx, bwallocation.SubscriptionInfo{
-		Bandwidth:   c.reservation,
-		Destination: c.remote,
-		Source:      c.local,
-		Expiration:  expiration,
-		Path:        &c.remote.Path,
-	})
+	sub, err := manager.Subscribe(ctx, r.SubscriptionInfo)
 	if err != nil {
 		return nil, nil, err
 	}
 	return &bwallocation.Conn{
-		Conn:         conn,
+		Conn:         r.Conn,
 		Subscription: sub,
 	}, sub.Close, nil
 }
