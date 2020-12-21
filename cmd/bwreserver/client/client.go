@@ -432,8 +432,9 @@ func (c *client) fetchStatsFromRemote(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			newCtx, cancel := context.WithTimeout(ctx, time.Second)
+			newCtx, cancel := context.WithTimeout(ctx, pollingInterval/2)
 			defer cancel()
+
 			response, err := client.Stats(newCtx, request)
 			if err != nil {
 				select {
