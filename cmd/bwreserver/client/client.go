@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -228,6 +229,10 @@ type client struct {
 	clientSeriesBuilder *view.SeriesBuilder
 	tsServer            *telemetry.TimeSeries
 	serverSeriesBuilder *view.SeriesBuilder
+
+	// bytesSentReportClient contains the number of bytes sent, as reported by the client.
+	// Accessed with atomics.
+	bytesSentReportClient int64
 }
 
 func (c *client) init(ctx context.Context, sd string, localIP net.IP) error {
@@ -360,16 +365,17 @@ func (c *client) run(ctx context.Context) error {
 	c.println("remote data endpoint:   ", conn.RemoteAddr())
 
 	sender := &sender{
-		dataConn:    conn,
-		remote:      c.remote,
-		rate:        c.rate,
-		reservation: c.reservation,
-		payloadSize: c.payloadSize,
-		duration:    c.duration,
-		ratelimit:   !c.quic,
-		text:        c.text,
-		view:        c.view,
-		tsClient:    c.tsClient,
+		dataConn:              conn,
+		remote:                c.remote,
+		rate:                  c.rate,
+		reservation:           c.reservation,
+		payloadSize:           c.payloadSize,
+		duration:              c.duration,
+		ratelimit:             !c.quic,
+		text:                  c.text,
+		view:                  c.view,
+		tsClient:              c.tsClient,
+		bytesSentReportClient: &c.bytesSentReportClient,
 	}
 
 	fetchCtx, cancelFetching := context.WithCancel(ctx)
@@ -562,6 +568,12 @@ func Reserve(ctx context.Context, r Reservation) (net.Conn, func(), error) {
 }
 
 func (c *client) reportStats() {
+	// Also collect counters here, because it's simpler than doing it in a separate sampling
+	// goroutine.
+	clientBitsCounter := float64(atomic.LoadInt64(&c.bytesSentReportClient)) * 8
+
+	c.tsClient.Add(telemetry.Entry{Timestamp: time.Now(), Value: clientBitsCounter})
+
 	// Latency of 1 second (data is 1 second in the past) to improve the chance that we have
 	// readings available.
 	windowStart := time.Now().Add(-2 * time.Second)
@@ -582,7 +594,12 @@ func (c *client) reportStats() {
 		fmt.Printf("sending rate:   %.2f mbps (client)\n", toZero(clientRateMbps))
 		fmt.Printf("receiving rate: %.2f mbps (server)\n", toZero(serverRateMbps))
 	} else {
-		c.view.UpdateGauge(int(clientRate))
+		if !math.IsNaN(clientRate) {
+			c.view.UpdateGauge(int(clientRate))
+		}
+		if !math.IsNaN(serverRate) {
+			c.view.UpdateServerGauge(int(serverRate))
+		}
 		c.clientSeriesBuilder.Update(clientRateMbps)
 		c.serverSeriesBuilder.Update(serverRateMbps)
 	}
@@ -604,6 +621,9 @@ type sender struct {
 	view        *view.View
 
 	tsClient *telemetry.TimeSeries
+	// bytesSentReportClient contains the number of bytes sent, as reported by the client.
+	// Accessed with atomics. This points to the same counter in the client.
+	bytesSentReportClient *int64
 }
 
 func (s *sender) send(ctx context.Context) error {
@@ -620,7 +640,6 @@ func (s *sender) send(ctx context.Context) error {
 	pld := make([]byte, s.payloadSize)
 	rand.Read(pld)
 
-	bytesSent := 0
 	start := time.Now()
 	end := start.Add(s.duration)
 	infinite := !end.After(start)
@@ -653,9 +672,7 @@ func (s *sender) send(ctx context.Context) error {
 				return err
 			}
 			// We want to measure the throughput including the SCION header.
-			bytesSent += pktLen
-			// Ignore errors, we can silently discard them
-			s.tsClient.Add(telemetry.Entry{Timestamp: time.Now(), Value: float64(bytesSent * 8)})
+			atomic.AddInt64(s.bytesSentReportClient, int64(pktLen))
 		}
 	}
 }

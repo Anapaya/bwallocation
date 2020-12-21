@@ -38,15 +38,21 @@ type View struct {
 	terminal  *tcell.Terminal
 	container *container.Container
 
-	gaugeText                *text.Text
-	sendingRateGauge         *gauge.Gauge
+	gaugeText        *text.Text
+	sendingRateGauge *gauge.Gauge
+
+	serverGaugeText        *text.Text
+	serverSendingRateGauge *gauge.Gauge
+
 	historicalSendRateClient *linechart.LineChart
 	historicalSendRateServer *linechart.LineChart
 	console                  *text.Text
 
 	mu sync.Mutex
 	// maxSendRate is the all-time max send rate
-	maxSendRate int
+	lastSendRate       int
+	serverLastSendRate int
+	maxSendRate        int
 }
 
 func New() (*View, error) {
@@ -81,6 +87,16 @@ func New() (*View, error) {
 	}
 	currentSendingRate.Absolute(0, 1)
 
+	serverCurrentSendingRate, err := gauge.New(
+		gauge.Height(1),
+		gauge.Color(cell.ColorCyan),
+		gauge.HideTextProgress(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	serverCurrentSendingRate.Absolute(0, 1)
+
 	historicalSendingRateClient, err := linechart.New(
 		linechart.AxesCellOpts(cell.FgColor(cell.ColorRed)),
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorGreen)),
@@ -104,6 +120,11 @@ func New() (*View, error) {
 		return nil, err
 	}
 
+	serverGaugeText, err := text.New()
+	if err != nil {
+		return nil, err
+	}
+
 	console, err := text.New(text.RollContent(), text.WrapAtWords())
 	if err != nil {
 		return nil, err
@@ -115,22 +136,45 @@ func New() (*View, error) {
 		container.BorderTitle("SCION Bandwidth Reservation Test Tool (Press Q to quit)"),
 		container.SplitHorizontal(
 			container.Top(
-				container.Border(linestyle.Light),
-				container.BorderTitle("Current sending rate"),
 				container.SplitHorizontal(
 					container.Top(
-						container.SplitVertical(
-							container.Left(),
-							container.Right(
-								container.PlaceWidget(gaugeText),
+						container.Border(linestyle.Light),
+						container.BorderTitle("Current sending rate - client"),
+						container.SplitHorizontal(
+							container.Top(
+								container.SplitVertical(
+									container.Left(),
+									container.Right(
+										container.PlaceWidget(gaugeText),
+									),
+								),
 							),
+							container.Bottom(
+								// container.Border(linestyle.Light),
+								container.PlaceWidget(currentSendingRate),
+							),
+							container.SplitFixed(1),
 						),
 					),
 					container.Bottom(
-						// container.Border(linestyle.Light),
-						container.PlaceWidget(currentSendingRate),
+						container.Border(linestyle.Light),
+						container.BorderTitle("Current receiving rate - server"),
+						container.SplitHorizontal(
+							container.Top(
+								container.SplitVertical(
+									container.Left(),
+									container.Right(
+										container.PlaceWidget(serverGaugeText),
+									),
+								),
+							),
+							container.Bottom(
+								// container.Border(linestyle.Light),
+								container.PlaceWidget(serverCurrentSendingRate),
+							),
+							container.SplitFixed(1),
+						),
 					),
-					container.SplitFixed(1),
 				),
 			),
 			container.Bottom(
@@ -158,7 +202,7 @@ func New() (*View, error) {
 					container.SplitPercent(40),
 				),
 			),
-			container.SplitFixed(4),
+			container.SplitFixed(8),
 		),
 	)
 	if err != nil {
@@ -170,7 +214,9 @@ func New() (*View, error) {
 		container: c,
 
 		gaugeText:                gaugeText,
+		serverGaugeText:          serverGaugeText,
 		sendingRateGauge:         currentSendingRate,
+		serverSendingRateGauge:   serverCurrentSendingRate,
 		historicalSendRateClient: historicalSendingRateClient,
 		historicalSendRateServer: historicalSendingRateServer,
 		console:                  console,
@@ -191,7 +237,7 @@ func (v *View) Run(ctx context.Context) error {
 }
 
 // UpdateGauge reports the current sending rate (in bits per second). The
-// rendered value is relative to the max seen sending rate.
+// rendered value is relative to the max seen sending rate across all gauges.
 func (v *View) UpdateGauge(bps int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -199,9 +245,35 @@ func (v *View) UpdateGauge(bps int) {
 	if bps > v.maxSendRate {
 		v.maxSendRate = bps
 	}
-	v.sendingRateGauge.Absolute(bps, v.maxSendRate)
+	v.lastSendRate = bps
+	v.updateGaugesLocked()
+}
+
+// UpdateServerGauge reports the current receiving rate (in bits per second). The
+// rendered value is relative to the max seen sending/receiving rate across all gauges.
+func (v *View) UpdateServerGauge(bps int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if bps > v.maxSendRate {
+		v.maxSendRate = bps
+	}
+	v.serverLastSendRate = bps
+	v.updateGaugesLocked()
+}
+
+func (v *View) updateGaugesLocked() {
+	v.sendingRateGauge.Absolute(v.lastSendRate, v.maxSendRate)
 	v.gaugeText.Write(
-		RenderBandwidth(bps, v.maxSendRate),
+		RenderBandwidth(v.lastSendRate, v.maxSendRate),
+		text.WriteReplace(),
+		text.WriteCellOpts(
+			cell.FgColor(cell.ColorCyan),
+		),
+	)
+	v.serverSendingRateGauge.Absolute(v.serverLastSendRate, v.maxSendRate)
+	v.serverGaugeText.Write(
+		RenderBandwidth(v.serverLastSendRate, v.maxSendRate),
 		text.WriteReplace(),
 		text.WriteCellOpts(
 			cell.FgColor(cell.ColorCyan),
