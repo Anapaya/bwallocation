@@ -82,6 +82,9 @@ func New() (*View, error) {
 		gauge.Color(cell.ColorCyan),
 		gauge.HideTextProgress(),
 	)
+	if err != nil {
+		return nil, err
+	}
 	currentSendingRate.Absolute(0, 1)
 
 	serverCurrentSendingRate, err := gauge.New(
@@ -89,6 +92,9 @@ func New() (*View, error) {
 		gauge.Color(cell.ColorCyan),
 		gauge.HideTextProgress(),
 	)
+	if err != nil {
+		return nil, err
+	}
 	serverCurrentSendingRate.Absolute(0, 1)
 
 	historicalSendingRateClient, err := linechart.New(
@@ -96,12 +102,18 @@ func New() (*View, error) {
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorGreen)),
 		linechart.XLabelCellOpts(cell.FgColor(cell.ColorCyan)),
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	historicalSendingRateServer, err := linechart.New(
 		linechart.AxesCellOpts(cell.FgColor(cell.ColorRed)),
 		linechart.YLabelCellOpts(cell.FgColor(cell.ColorGreen)),
 		linechart.XLabelCellOpts(cell.FgColor(cell.ColorCyan)),
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	gaugeText, err := text.New()
 	if err != nil {
@@ -193,6 +205,9 @@ func New() (*View, error) {
 			container.SplitFixed(8),
 		),
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	return &View{
 		terminal:  t,
