@@ -32,6 +32,7 @@ import (
 	"github.com/scionproto/scion/go/lib/spath"
 	"github.com/scionproto/scion/go/lib/util"
 	"github.com/scionproto/scion/go/pkg/grpc"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -233,6 +234,9 @@ func (s *Subscription) fetchToken(ctx context.Context) error {
 		Path:           s.info.Path.Raw,
 	})
 	if err != nil {
+		if st, ok := status.FromError(err); ok && len(st.Details()) > 0 {
+			return serrors.WithCtx(err, "details", st.Details())
+		}
 		return err
 	}
 
